@@ -107,6 +107,25 @@ create trigger restaurants_set_updated_at
 before update on public.restaurants
 for each row execute function public.set_updated_at();
 
+create or replace function public.protect_restaurant_approval()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if auth.role() <> 'service_role'
+     and not public.is_admin()
+     and new.approval_status is distinct from old.approval_status then
+    raise exception 'Only an admin can change restaurant approval status';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger restaurants_protect_approval
+before update on public.restaurants
+for each row execute function public.protect_restaurant_approval();
+
 create table public.categories (
   id uuid primary key default gen_random_uuid(),
   restaurant_id uuid not null references public.restaurants(id) on delete cascade,
@@ -166,6 +185,25 @@ create trigger driver_profiles_set_updated_at
 before update on public.driver_profiles
 for each row execute function public.set_updated_at();
 
+create or replace function public.protect_driver_approval()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if auth.role() <> 'service_role'
+     and not public.is_admin()
+     and new.approval_status is distinct from old.approval_status then
+    raise exception 'Only an admin can change driver approval status';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger driver_profiles_protect_approval
+before update on public.driver_profiles
+for each row execute function public.protect_driver_approval();
+
 create table public.orders (
   id uuid primary key default gen_random_uuid(),
   order_number bigint generated always as identity unique,
@@ -198,6 +236,34 @@ create index orders_status_idx on public.orders(status);
 create trigger orders_set_updated_at
 before update on public.orders
 for each row execute function public.set_updated_at();
+
+create or replace function public.protect_order_fields()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if auth.role() = 'service_role' or public.is_admin() then
+    return new;
+  end if;
+
+  if new.customer_id is distinct from old.customer_id
+     or new.restaurant_id is distinct from old.restaurant_id
+     or new.driver_id is distinct from old.driver_id
+     or new.subtotal is distinct from old.subtotal
+     or new.delivery_fee is distinct from old.delivery_fee
+     or new.total is distinct from old.total
+     or new.placed_at is distinct from old.placed_at then
+    raise exception 'Order financial and assignment fields are server-managed';
+  end if;
+
+  return new;
+end;
+$$;
+
+create trigger orders_protect_fields
+before update on public.orders
+for each row execute function public.protect_order_fields();
 
 create table public.order_items (
   id uuid primary key default gen_random_uuid(),
@@ -242,6 +308,13 @@ declare
 begin
   if auth.uid() is null or public.current_user_role() <> 'driver' then
     raise exception 'Only approved drivers can accept orders';
+  end if;
+
+  if not exists (
+    select 1 from public.driver_profiles
+    where id = auth.uid() and approval_status = 'approved' and is_available
+  ) then
+    raise exception 'Your driver account is not approved or currently offline';
   end if;
 
   update public.orders
@@ -380,10 +453,10 @@ with check (customer_id = auth.uid());
 create policy "Order participants can update orders"
 on public.orders for update
 to authenticated
-using (customer_id = auth.uid() or driver_id = auth.uid() or public.is_admin() or restaurant_id in (
+using (driver_id = auth.uid() or public.is_admin() or restaurant_id in (
   select id from public.restaurants where owner_id = auth.uid()
 ))
-with check (customer_id = auth.uid() or driver_id = auth.uid() or public.is_admin() or restaurant_id in (
+with check (driver_id = auth.uid() or public.is_admin() or restaurant_id in (
   select id from public.restaurants where owner_id = auth.uid()
 ));
 
