@@ -1,0 +1,3 @@
+-- Add safe reference data after the first migration if needed.
+-- Restaurant and food seed records should be created after approved auth users
+-- exist, because restaurants.owner_id references public.profiles(id).
