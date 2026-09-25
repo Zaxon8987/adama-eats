@@ -67,20 +67,6 @@ as $$
   select coalesce(public.current_user_role() = 'admin', false);
 $$;
 
-create or replace function public.is_restaurant_owner(target_restaurant_id uuid)
-returns boolean
-language sql
-stable
-security definer set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.restaurants r
-    where r.id = target_restaurant_id
-      and r.owner_id = auth.uid()
-  );
-$$;
-
 create table public.restaurants (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references public.profiles(id) on delete restrict,
@@ -106,6 +92,20 @@ create index restaurants_approval_status_idx on public.restaurants(approval_stat
 create trigger restaurants_set_updated_at
 before update on public.restaurants
 for each row execute function public.set_updated_at();
+
+create or replace function public.is_restaurant_owner(target_restaurant_id uuid)
+returns boolean
+language sql
+stable
+security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.restaurants r
+    where r.id = target_restaurant_id
+      and r.owner_id = auth.uid()
+  );
+$$;
 
 create or replace function public.protect_restaurant_approval()
 returns trigger
