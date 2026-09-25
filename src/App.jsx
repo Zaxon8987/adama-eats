@@ -124,6 +124,7 @@ function normalizeEthiopianPhone(value) {
   const digits = String(value || '').replace(/\D/g, '')
   if (digits.startsWith('0')) return `+251${digits.slice(1)}`
   if (digits.startsWith('251')) return `+${digits}`
+  if (/^9\d{8}$/.test(digits)) return `+251${digits}`
   return value
 }
 
