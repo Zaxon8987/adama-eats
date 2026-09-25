@@ -13,6 +13,10 @@ port = 54323
 [auth]
 enabled = true
 
+[auth.sms]
+enable_signup = true
+enable_confirmations = false
+
 [storage]
 enabled = true
 

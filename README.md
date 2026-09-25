@@ -84,7 +84,9 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 
 ## Phone authentication
 
-Public sign-in and account creation use Ethiopian phone numbers with a password. SMS verification is intentionally disabled for normal login. The forgot-password flow uses a temporary phone code, so configure Supabase Phone/SMS delivery before using recovery in production. Login attempts are checked by the `login-rate-limit` Edge Function. Optional phone verification can later mark `profiles.phone_verified_at` through the `mark-phone-verified` Edge Function.
+Public sign-in and account creation use Ethiopian phone numbers with a password. The app uses a server-side phone-alias identity, so users never enter or see an email address and normal login does not require SMS delivery. The `phone-password-signup` Edge Function creates the confirmed internal account; the browser then signs in through Supabase Auth.
+
+The forgot-password flow currently uses a temporary phone code, so configure Supabase Phone/SMS delivery before enabling self-service recovery. Optional phone verification is feature-flagged and can later mark `profiles.phone_verified_at` through `mark-phone-verified`. Login attempts are checked by `login-rate-limit`.
 
 ## Partner onboarding
 

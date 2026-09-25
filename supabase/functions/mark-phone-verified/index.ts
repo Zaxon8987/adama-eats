@@ -43,11 +43,17 @@ Deno.serve(async (request) => {
 
     const body = await request.json()
     const phone = String(body?.phone || '').trim()
-    if (!phone || phone !== userData.user.phone) return json(request, { error: 'Phone does not match the signed-in account.' }, 400)
-
     const admin = createClient(supabaseUrl, serviceRoleKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     })
+    const { data: profile, error: profileError } = await admin
+      .from('profiles')
+      .select('phone')
+      .eq('id', userData.user.id)
+      .maybeSingle()
+    if (profileError) return json(request, { error: profileError.message }, 500)
+    if (!phone || phone !== profile?.phone) return json(request, { error: 'Phone does not match the signed-in account.' }, 400)
+
     const { data, error } = await admin
       .from('profiles')
       .update({ phone_verified_at: new Date().toISOString() })

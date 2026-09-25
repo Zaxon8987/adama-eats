@@ -55,7 +55,7 @@ import {
   restaurants,
 } from './data'
 import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
-import { checkLoginRateLimit } from './lib/authSecurity'
+import { checkLoginRateLimit, phoneAliasEmail, signUpWithPhone } from './lib/authSecurity'
 import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashboards'
 import PhoneAuthModal from './components/PhoneAuthModal'
 import PasswordResetModal from './components/PasswordResetModal'
@@ -412,24 +412,16 @@ function App() {
 
       if (authMode === 'signup') {
         requestedAccountType.current = authRole
-        const { data, error } = await supabase.auth.signUp({
-          phone,
-          password: form.password,
-          options: { data: { full_name: form.name } },
-        })
-        if (error) {
-          requestedAccountType.current = null
-          throw error
-        }
-        if (!data.session) {
-          requestedAccountType.current = null
-          setAuthError('Your account was created. Please sign in with your phone number and password.')
-          setAuthMode('signin')
-          return
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ phone, password: form.password })
-        if (error) throw error
+        await signUpWithPhone(supabase, { phone, password: form.password, name: form.name })
+      }
+
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: phoneAliasEmail(phone),
+        password: form.password,
+      })
+      if (signInError) {
+        requestedAccountType.current = null
+        throw signInError
       }
 
       await checkLoginRateLimit(supabase, phone, 'success')

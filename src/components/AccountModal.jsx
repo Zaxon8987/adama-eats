@@ -10,7 +10,8 @@ export default function AccountModal({ user, profile, onClose, onVerified, onSig
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const verified = Boolean(profile?.phone_verified_at)
-  const phone = user?.phone || profile?.phone || 'Not added'
+  const accountPhone = user?.phone || profile?.phone || ''
+  const phone = accountPhone || 'Not added'
 
   const sendVerification = async () => {
     setError('')
@@ -18,7 +19,7 @@ export default function AccountModal({ user, profile, onClose, onVerified, onSig
     try {
       if (!phoneVerificationEnabled) throw new Error('Optional phone verification is not enabled yet.')
       if (!user?.phone) throw new Error('This account does not have a phone number.')
-      const { error: otpError } = await supabase.auth.signInWithOtp({ phone: user.phone, options: { shouldCreateUser: false } })
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone: accountPhone, options: { shouldCreateUser: false } })
       if (otpError) throw otpError
       setStage('code')
     } catch (verificationError) {
@@ -33,10 +34,10 @@ export default function AccountModal({ user, profile, onClose, onVerified, onSig
     setError('')
     setLoading(true)
     try {
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({ phone: user.phone, token: code, type: 'sms' })
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({ phone: accountPhone, token: code, type: 'sms' })
       if (verifyError) throw verifyError
       if (!data.session) throw new Error('The verification session could not be created.')
-      const { error: markError } = await supabase.functions.invoke('mark-phone-verified', { body: { phone: user.phone } })
+      const { error: markError } = await supabase.functions.invoke('mark-phone-verified', { body: { phone: accountPhone } })
       if (markError) throw markError
       onVerified?.()
       setStage('idle')
