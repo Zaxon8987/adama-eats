@@ -55,6 +55,22 @@ import {
   restaurants,
 } from './data'
 import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
+import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashboards'
+import {
+  acceptDriverOrder as acceptLiveDriverOrder,
+  approveDriver as approveLiveDriver,
+  approveRestaurant as approveLiveRestaurant,
+  createDriverProfile,
+  createFoodItem,
+  createRestaurant,
+  fetchAdminApprovals,
+  fetchDriverWorkspace,
+  fetchOwnerWorkspace,
+  fetchProfile,
+  setDriverAvailability,
+  updateDriverOrderStatus,
+  updateFoodItem,
+} from './lib/operations'
 
 const copy = {
   en: {
@@ -142,6 +158,11 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [user, setUser] = useState(null)
+  const [accountProfile, setAccountProfile] = useState(null)
+  const [ownerWorkspace, setOwnerWorkspace] = useState({ restaurant: null, categories: [], foodItems: [] })
+  const [adminApprovals, setAdminApprovals] = useState({ restaurants: [], drivers: [] })
+  const [driverWorkspace, setDriverWorkspace] = useState({ profile: null, availableOrders: [], activeOrder: null })
+  const [liveLoading, setLiveLoading] = useState(false)
 
   useEffect(() => {
     if (!toast) return undefined
@@ -151,11 +172,39 @@ function App() {
 
   useEffect(() => {
     if (!supabase) return undefined
-    supabase.auth.getUser().then(({ data }) => setUser(data.user || null)).catch(() => {})
+    let active = true
+
+    const loadUserProfile = async (nextUser) => {
+      if (!active) return
+      setUser(nextUser || null)
+      if (!nextUser) {
+        setAccountProfile(null)
+        setRole('customer')
+        setView('home')
+        return
+      }
+
+      try {
+        const profile = await fetchProfile(nextUser.id)
+        if (!active) return
+        setAccountProfile(profile)
+        if (profile?.role) {
+          setRole(profile.role)
+          setView(profile.role === 'customer' ? 'home' : 'dashboard')
+        }
+      } catch {
+        if (active) setAccountProfile(null)
+      }
+    }
+
+    supabase.auth.getUser().then(({ data }) => loadUserProfile(data.user || null)).catch(() => {})
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null)
+      loadUserProfile(session?.user || null)
     })
-    return () => listener?.subscription.unsubscribe()
+    return () => {
+      active = false
+      listener?.subscription.unsubscribe()
+    }
   }, [])
 
   useEffect(() => {
@@ -166,6 +215,57 @@ function App() {
       })
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!supabase || !user || role !== 'owner') return undefined
+    let active = true
+    setLiveLoading(true)
+    fetchOwnerWorkspace(user.id)
+      .then((workspace) => {
+        if (active) setOwnerWorkspace(workspace)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLiveLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [accountProfile?.role, role, supabase, user])
+
+  useEffect(() => {
+    if (!supabase || !user || accountProfile?.role !== 'admin' || role !== 'admin') return undefined
+    let active = true
+    setLiveLoading(true)
+    fetchAdminApprovals()
+      .then((approvals) => {
+        if (active) setAdminApprovals(approvals)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLiveLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [accountProfile?.role, role, supabase, user])
+
+  useEffect(() => {
+    if (!supabase || !user || role !== 'driver') return undefined
+    let active = true
+    setLiveLoading(true)
+    fetchDriverWorkspace(user.id)
+      .then((workspace) => {
+        if (active) setDriverWorkspace(workspace)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLiveLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [accountProfile?.role, role, supabase, user])
 
   const filteredRestaurants = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -379,6 +479,132 @@ function App() {
     showToast(`${request?.name || 'Account'} approved`)
   }
 
+  const handleApproveRequest = async (request, approved = true) => {
+    const liveAdmin = Boolean(user && accountProfile?.role === 'admin' && role === 'admin')
+    if (!liveAdmin) {
+      approveRequest(request.id)
+      return
+    }
+
+    try {
+      if (request.type === 'Driver') {
+        await approveLiveDriver(request.id, approved)
+      } else {
+        await approveLiveRestaurant(request.id, request.ownerId, approved)
+      }
+      const nextApprovals = await fetchAdminApprovals()
+      setAdminApprovals(nextApprovals)
+      showToast(approved ? `${request.name} approved` : `${request.name} rejected`)
+    } catch (error) {
+      showToast(error.message || 'Could not update this request', 'warning')
+    }
+  }
+
+  const handleCreateRestaurant = async (form) => {
+    if (!supabase || !user) throw new Error('Sign in to register a restaurant.')
+    const restaurant = await createRestaurant({ userId: user.id, ...form })
+    setOwnerWorkspace((current) => ({ ...current, restaurant }))
+    showToast('Restaurant application submitted for admin approval')
+    return restaurant
+  }
+
+  const handleAddOwnerFood = async (form, file) => {
+    if (!supabase || !user || !ownerWorkspace.restaurant) {
+      addOwnerFood({
+        id: `owner-${Date.now()}`,
+        name: form.name,
+        price: Number(form.price),
+        description: form.description || 'A new favorite from your kitchen.',
+        category: form.category,
+        image: 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=500&q=82',
+        popular: false,
+      })
+      return
+    }
+
+    try {
+      const food = await createFoodItem({ userId: user.id, restaurantId: ownerWorkspace.restaurant.id, form, file })
+      setOwnerWorkspace((current) => ({ ...current, foodItems: [food, ...current.foodItems] }))
+      showToast(`${food.name} added to your menu`)
+    } catch (error) {
+      showToast(error.message || 'Could not add this food item', 'warning')
+      throw error
+    }
+  }
+
+  const handleToggleOwnerFood = async (item) => {
+    if (!supabase || !user || !ownerWorkspace.restaurant || !isUuid(item.id)) return
+    try {
+      const updated = await updateFoodItem(item.id, { is_available: !item.available })
+      setOwnerWorkspace((current) => ({
+        ...current,
+        foodItems: current.foodItems.map((entry) => (entry.id === item.id ? updated : entry)),
+      }))
+      showToast(updated.available ? 'Food item is now available' : 'Food item hidden from the menu')
+    } catch (error) {
+      showToast(error.message || 'Could not update this food item', 'warning')
+    }
+  }
+
+  const handleCreateDriverProfile = async (form) => {
+    if (!supabase || !user) throw new Error('Sign in to apply as a driver.')
+    const profile = await createDriverProfile({ userId: user.id, ...form })
+    setDriverWorkspace((current) => ({ ...current, profile }))
+    showToast('Driver application submitted for admin approval')
+    return profile
+  }
+
+  const handleSetDriverAvailability = async (isAvailable) => {
+    if (!supabase || !user || !driverWorkspace.profile) {
+      showToast(isAvailable ? 'Demo driver is online' : 'Demo driver is offline', 'info')
+      return
+    }
+    try {
+      const profile = await setDriverAvailability(user.id, isAvailable)
+      setDriverWorkspace((current) => ({ ...current, profile }))
+      showToast(isAvailable ? 'You are now online' : 'You are now offline')
+    } catch (error) {
+      showToast(error.message || 'Could not update availability', 'warning')
+    }
+  }
+
+  const handleAcceptDriverOrder = async (order) => {
+    if (!supabase || !user || !driverWorkspace.profile) {
+      acceptDriverOrder(order)
+      return
+    }
+    try {
+      await acceptLiveDriverOrder(order.id)
+      setDriverWorkspace((current) => ({
+        ...current,
+        availableOrders: current.availableOrders.filter((entry) => entry.id !== order.id),
+        activeOrder: { ...order, status: 'assigned' },
+      }))
+      showToast(`${order.displayId || order.id} accepted`)
+    } catch (error) {
+      showToast(error.message || 'This order is no longer available', 'warning')
+    }
+  }
+
+  const handleUpdateDriverStatus = async (order, status) => {
+    if (!supabase || !user || !driverWorkspace.profile) {
+      showToast('Demo delivery status updated', 'info')
+      return
+    }
+    try {
+      await updateDriverOrderStatus(order.id, status)
+      setDriverWorkspace((current) => ({ ...current, activeOrder: current.activeOrder ? { ...current.activeOrder, status } : null }))
+      showToast('Delivery status updated')
+    } catch (error) {
+      showToast(error.message || 'Could not update delivery status', 'warning')
+    }
+  }
+
+  const liveOwner = Boolean(supabase && user && role === 'owner')
+  const liveAdmin = Boolean(supabase && user && accountProfile?.role === 'admin' && role === 'admin')
+  const liveDriver = Boolean(supabase && user && role === 'driver')
+  const liveApprovalItems = liveAdmin ? [...adminApprovals.restaurants, ...adminApprovals.drivers] : approvalItems
+
   return (
     <div className="app-shell">
       <Header
@@ -441,11 +667,23 @@ function App() {
             navigate={navigate}
             ownerItems={ownerItems}
             addOwnerFood={addOwnerFood}
+            ownerWorkspace={ownerWorkspace}
+            createRestaurant={handleCreateRestaurant}
+            addOwnerFoodItem={handleAddOwnerFood}
+            toggleOwnerFood={handleToggleOwnerFood}
             driverOrders={driverOrders}
             activeDriverOrder={activeDriverOrder}
-            acceptDriverOrder={acceptDriverOrder}
-            approvalItems={approvalItems}
-            approveRequest={approveRequest}
+            driverWorkspace={driverWorkspace}
+            createDriverProfile={handleCreateDriverProfile}
+            setDriverAvailability={handleSetDriverAvailability}
+            acceptDriverOrder={handleAcceptDriverOrder}
+            updateDriverStatus={handleUpdateDriverStatus}
+            approvalItems={liveApprovalItems}
+            approveRequest={handleApproveRequest}
+            liveAdmin={liveAdmin}
+            liveOwner={liveOwner}
+            liveDriver={liveDriver}
+            liveLoading={liveLoading}
             showToast={showToast}
           />
         )}
@@ -816,20 +1054,51 @@ function ActiveOrderCard({ order }) {
   )
 }
 
-function DashboardView({ role, navigate, ownerItems, addOwnerFood, driverOrders, activeDriverOrder, acceptDriverOrder, approvalItems, approveRequest, showToast }) {
+function DashboardView({
+  role,
+  navigate,
+  ownerItems,
+  addOwnerFood,
+  ownerWorkspace,
+  createRestaurant,
+  addOwnerFoodItem,
+  toggleOwnerFood,
+  driverOrders,
+  activeDriverOrder,
+  driverWorkspace,
+  createDriverProfile,
+  setDriverAvailability,
+  acceptDriverOrder,
+  updateDriverStatus,
+  approvalItems,
+  approveRequest,
+  liveAdmin,
+  liveOwner,
+  liveDriver,
+  liveLoading,
+  showToast,
+}) {
   const meta = {
     admin: { kicker: 'Platform control center', title: 'Good morning, admin', subtitle: 'Here is what is happening across Adama Eats today.', icon: LayoutDashboard },
-    owner: { kicker: 'Restaurant partner', title: 'Buna Kitchen', subtitle: 'Keep your menu fresh and your neighbors happy.', icon: Store },
+    owner: { kicker: 'Restaurant partner', title: liveOwner && ownerWorkspace.restaurant ? ownerWorkspace.restaurant.name : 'Buna Kitchen', subtitle: 'Keep your menu fresh and your neighbors happy.', icon: Store },
     driver: { kicker: 'Driver hub', title: 'Ready when you are, driver', subtitle: 'Pick up nearby orders and keep Adama moving.', icon: Bike },
   }[role]
   const Icon = meta.icon
+  const visibleOwnerItems = liveOwner ? ownerWorkspace.foodItems : ownerItems
+  const visibleDriverOrders = liveDriver ? driverWorkspace.availableOrders : driverOrders
+  const visibleActiveOrder = liveDriver ? driverWorkspace.activeOrder : activeDriverOrder
 
   return (
     <div className="dashboard-page">
-      <div className="dashboard-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> {meta.kicker}</div><h1>{meta.title}</h1><p>{meta.subtitle}</p></div><div className="dashboard-heading-actions"><button className="outline-button" type="button" onClick={() => navigate('home')}><ExternalLink size={15} /> View storefront</button><button className="primary-button" type="button" onClick={() => showToast(role === 'owner' ? 'Food upload form opened below' : 'Dashboard actions are ready', 'info')}><Plus size={16} /> {role === 'owner' ? 'Add food' : 'Quick action'}</button></div></div>
-      {role === 'admin' && <AdminDashboard approvalItems={approvalItems} approveRequest={approveRequest} showToast={showToast} />}
-      {role === 'owner' && <OwnerDashboard ownerItems={ownerItems} addOwnerFood={addOwnerFood} showToast={showToast} />}
-      {role === 'driver' && <DriverDashboard driverOrders={driverOrders} activeDriverOrder={activeDriverOrder} acceptDriverOrder={acceptDriverOrder} showToast={showToast} />}
+      <div className="dashboard-heading"><div><div className="eyebrow"><span className="eyebrow-dot" /> {meta.kicker}</div><h1>{meta.title}</h1><p>{meta.subtitle}</p></div><div className="dashboard-heading-actions"><button className="outline-button" type="button" onClick={() => navigate('home')}><ExternalLink size={15} /> View storefront</button><button className="primary-button" type="button" onClick={() => showToast(role === 'owner' ? 'Use the menu panel below to add food' : 'Dashboard actions are ready', 'info')}><Plus size={16} /> {role === 'owner' ? 'Add food' : 'Quick action'}</button></div></div>
+      {liveLoading && <div className="live-loading-banner"><span className="spinner spinner-dark" /> Syncing your live workspace…</div>}
+      {role === 'admin' && <AdminDashboard approvalItems={approvalItems} approveRequest={approveRequest} live={liveAdmin} showToast={showToast} />}
+      {role === 'owner' && (liveOwner
+        ? <LiveOwnerDashboard restaurant={ownerWorkspace.restaurant} foodItems={visibleOwnerItems} loading={liveLoading} createRestaurant={createRestaurant} addFood={addOwnerFoodItem} toggleFood={toggleOwnerFood} showToast={showToast} />
+        : <OwnerDashboard ownerItems={visibleOwnerItems} addOwnerFood={addOwnerFood} showToast={showToast} />)}
+      {role === 'driver' && (liveDriver
+        ? <LiveDriverDashboard profile={driverWorkspace.profile} availableOrders={visibleDriverOrders} activeOrder={visibleActiveOrder} loading={liveLoading} createProfile={createDriverProfile} setAvailability={setDriverAvailability} acceptOrder={acceptDriverOrder} updateStatus={updateDriverStatus} showToast={showToast} />
+        : <DriverDashboard driverOrders={visibleDriverOrders} activeDriverOrder={visibleActiveOrder} acceptDriverOrder={acceptDriverOrder} showToast={showToast} />)}
       {role === 'customer' && <div className="dashboard-placeholder"><Icon size={28} /><h2>Customer dashboard is coming next</h2><p>Use the role selector to preview the admin, restaurant owner, or driver workspace.</p></div>}
     </div>
   )
@@ -839,11 +1108,11 @@ function DashboardStat({ icon: Icon, label, value, change, tone }) {
   return <div className="dashboard-stat"><span className={`stat-icon ${tone}`}><Icon size={18} /></span><div><small>{label}</small><strong>{value}</strong><span className="stat-change"><TrendingUp size={12} /> {change}</span></div></div>
 }
 
-function AdminDashboard({ approvalItems, approveRequest, showToast }) {
+function AdminDashboard({ approvalItems, approveRequest, live, showToast }) {
   return (
     <>
       <div className="dashboard-stat-grid"><DashboardStat icon={CircleDollarSign} label="Today's sales" value="ETB 18,420" change="12.8%" tone="green" /><DashboardStat icon={ShoppingBag} label="Active orders" value="24" change="8.4%" tone="orange" /><DashboardStat icon={Store} label="Live restaurants" value="18" change="3 new" tone="blue" /><DashboardStat icon={Users} label="Active drivers" value="11" change="2 online" tone="purple" /></div>
-      <div className="dashboard-columns admin-columns"><section className="dashboard-panel approval-panel"><div className="panel-heading"><div><span className="section-kicker">Needs your attention</span><h2>Approval requests <span className="count-badge">{approvalItems.length}</span></h2></div><button className="icon-button" type="button" onClick={() => showToast('Showing all approval requests', 'info')}><MoreHorizontal size={18} /></button></div>{approvalItems.length ? <div className="approval-list">{approvalItems.map((request) => <div className="approval-row" key={request.id}><span className={`request-avatar ${request.tone}`}>{request.initials}</span><div className="request-info"><strong>{request.name}</strong><small>{request.type} · {request.detail}</small></div><span className="pending-pill">Pending</span><button className="small-outline-button" type="button" onClick={() => approveRequest(request.id)}>Review</button><button className="approve-button" type="button" onClick={() => approveRequest(request.id)}><Check size={15} /></button></div>)}</div> : <div className="panel-empty"><CheckCircle2 size={23} /><strong>All caught up</strong><span>No pending approvals right now.</span></div>}</section><section className="dashboard-panel performance-panel"><div className="panel-heading"><div><span className="section-kicker">Last 7 days</span><h2>Order activity</h2></div><button className="date-select" type="button">This week <ChevronDown size={14} /></button></div><div className="fake-chart"><div className="chart-y-labels"><span>40</span><span>30</span><span>20</span><span>10</span><span>0</span></div><div className="chart-area"><div className="chart-grid-lines"><i /><i /><i /><i /><i /></div><svg viewBox="0 0 500 180" preserveAspectRatio="none" aria-label="Orders trend"><defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#2e8063" stopOpacity=".25" /><stop offset="100%" stopColor="#2e8063" stopOpacity="0" /></linearGradient></defs><path d="M0 150 C30 146 35 120 66 126 S100 112 125 118 S160 80 188 99 S225 92 250 100 S278 48 310 72 S348 55 375 62 S408 26 438 45 S472 22 500 30 L500 180 L0 180 Z" fill="url(#chartFill)" /><path d="M0 150 C30 146 35 120 66 126 S100 112 125 118 S160 80 188 99 S225 92 250 100 S278 48 310 72 S348 55 375 62 S408 26 438 45 S472 22 500 30" fill="none" stroke="#2e8063" strokeWidth="3" strokeLinecap="round" /></svg><div className="chart-x-labels"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div></div></div></section></div>
+      <div className="dashboard-columns admin-columns"><section className="dashboard-panel approval-panel"><div className="panel-heading"><div><span className="section-kicker">Needs your attention</span><h2>Approval requests <span className="count-badge">{approvalItems.length}</span></h2></div><button className="icon-button" type="button" onClick={() => showToast('Showing all approval requests', 'info')}><MoreHorizontal size={18} /></button></div>{approvalItems.length ? <div className="approval-list">{approvalItems.map((request) => <div className="approval-row" key={request.id}><span className={`request-avatar ${request.tone}`}>{request.initials}</span><div className="request-info"><strong>{request.name}</strong><small>{request.type} · {request.detail}</small></div><span className="pending-pill">Pending</span><button className="small-outline-button" type="button" onClick={() => live ? approveRequest(request, false) : showToast('Demo review opened', 'info')}>{live ? 'Reject' : 'Review'}</button><button className="approve-button" type="button" onClick={() => approveRequest(request, true)} aria-label={`Approve ${request.name}`}><Check size={15} /></button></div>)}</div> : <div className="panel-empty"><CheckCircle2 size={23} /><strong>All caught up</strong><span>No pending approvals right now.</span></div>}</section><section className="dashboard-panel performance-panel"><div className="panel-heading"><div><span className="section-kicker">Last 7 days</span><h2>Order activity</h2></div><button className="date-select" type="button">This week <ChevronDown size={14} /></button></div><div className="fake-chart"><div className="chart-y-labels"><span>40</span><span>30</span><span>20</span><span>10</span><span>0</span></div><div className="chart-area"><div className="chart-grid-lines"><i /><i /><i /><i /><i /></div><svg viewBox="0 0 500 180" preserveAspectRatio="none" aria-label="Orders trend"><defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#2e8063" stopOpacity=".25" /><stop offset="100%" stopColor="#2e8063" stopOpacity="0" /></linearGradient></defs><path d="M0 150 C30 146 35 120 66 126 S100 112 125 118 S160 80 188 99 S225 92 250 100 S278 48 310 72 S348 55 375 62 S408 26 438 45 S472 22 500 30 L500 180 L0 180 Z" fill="url(#chartFill)" /><path d="M0 150 C30 146 35 120 66 126 S100 112 125 118 S160 80 188 99 S225 92 250 100 S278 48 310 72 S348 55 375 62 S408 26 438 45 S472 22 500 30" fill="none" stroke="#2e8063" strokeWidth="3" strokeLinecap="round" /></svg><div className="chart-x-labels"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div></div></div></section></div>
       <section className="dashboard-panel recent-orders-panel"><div className="panel-heading"><div><span className="section-kicker">Live feed</span><h2>Recent orders</h2></div><button className="outline-button" type="button" onClick={() => showToast('Full order history is coming next', 'info')}>View all <ArrowRight size={15} /></button></div><OrderTable /></section>
     </>
   )
