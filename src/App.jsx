@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertCircle,
   ArrowLeft,
@@ -154,6 +154,7 @@ function App() {
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState('signin')
   const [authRole, setAuthRole] = useState('customer')
+  const requestedAccountType = useRef(null)
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
@@ -178,6 +179,7 @@ function App() {
       if (!active) return
       setUser(nextUser || null)
       if (!nextUser) {
+        requestedAccountType.current = null
         setAccountProfile(null)
         setRole('customer')
         setView('home')
@@ -188,10 +190,14 @@ function App() {
         const profile = await fetchProfile(nextUser.id)
         if (!active) return
         setAccountProfile(profile)
-        if (profile?.role) {
-          setRole(profile.role)
-          setView(profile.role === 'customer' ? 'home' : 'dashboard')
+        const profileRole = requestedAccountType.current && profile?.role === 'customer'
+          ? requestedAccountType.current
+          : profile?.role
+        if (profileRole) {
+          setRole(profileRole)
+          setView(profileRole === 'customer' ? 'home' : 'dashboard')
         }
+        requestedAccountType.current = null
       } catch {
         if (active) setAccountProfile(null)
       }
@@ -366,11 +372,18 @@ function App() {
           password: form.password,
           options: { data: { full_name: form.name } },
         })
-        if (error) throw error
+        if (error) {
+          requestedAccountType.current = null
+          throw error
+        }
         if (!data.session) {
+          requestedAccountType.current = null
           setAuthError('Check your email to confirm your account, then sign in.')
           return
         }
+        requestedAccountType.current = authRole
+        setRole(authRole)
+        if (authRole !== 'customer') navigate('dashboard')
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: form.email,
@@ -612,6 +625,7 @@ function App() {
         language={language}
         setLanguage={setLanguage}
         role={role}
+        accountRole={accountProfile?.role}
         changeRole={changeRole}
         cartCount={cartCount}
         setCartOpen={setCartOpen}
@@ -746,6 +760,7 @@ function Header({
   language,
   setLanguage,
   role,
+  accountRole,
   changeRole,
   cartCount,
   setCartOpen,
@@ -757,6 +772,13 @@ function Header({
   setMobileMenuOpen,
   onBell,
 }) {
+  const availableRoles = [
+    { value: 'customer', label: 'Customer view' },
+    { value: 'owner', label: 'Restaurant owner' },
+    { value: 'driver', label: 'Driver view' },
+    ...(accountRole === 'admin' ? [{ value: 'admin', label: 'Admin view' }] : []),
+  ]
+
   return (
     <header className="site-header">
       <div className="header-inner">
@@ -790,12 +812,9 @@ function Header({
             className="role-select"
             value={role}
             onChange={(event) => changeRole(event.target.value)}
-            aria-label="Preview a user role"
+            aria-label="Choose a workspace"
           >
-            <option value="customer">Customer view</option>
-            <option value="owner">Restaurant owner</option>
-            <option value="driver">Driver view</option>
-            <option value="admin">Admin view</option>
+            {availableRoles.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
           <button className="language-button" type="button" onClick={() => setLanguage(language === 'en' ? 'am' : 'en')}>
             <Languages size={16} />
@@ -826,12 +845,9 @@ function Header({
           {role !== 'customer' && <button type="button" onClick={() => navigate('dashboard')}>Dashboard</button>}
           <div className="mobile-nav-divider" />
           <label className="mobile-role-label">
-            Preview role
+            Workspace
             <select value={role} onChange={(event) => changeRole(event.target.value)}>
-              <option value="customer">Customer view</option>
-              <option value="owner">Restaurant owner</option>
-              <option value="driver">Driver view</option>
-              <option value="admin">Admin view</option>
+              {availableRoles.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
         </div>
@@ -1156,7 +1172,7 @@ function DriverDashboard({ driverOrders, activeDriverOrder, acceptDriverOrder, s
 function AuthModal({ mode, setMode, form, setForm, role, setRole, onClose, onSubmit, loading, error }) {
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   return (
-    <div className="modal-layer" onClick={onClose}><div className="auth-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close-floating" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button><div className="auth-brand"><span className="brand-mark">ae</span><span className="brand-word">adama<span>eats</span></span></div><span className="section-kicker">Welcome to the table</span><h2>{mode === 'signin' ? 'Good to see you' : 'Create your account'}</h2><p className="auth-intro">{mode === 'signin' ? 'Sign in to track orders and keep your favorites close.' : 'Create your account, then choose an owner or driver workspace to apply.'}</p><div className="auth-tabs"><button className={mode === 'signin' ? 'active' : ''} type="button" onClick={() => setMode('signin')}>Sign in</button><button className={mode === 'signup' ? 'active' : ''} type="button" onClick={() => setMode('signup')}>Create account</button></div><form className="auth-form" onSubmit={(event) => { event.preventDefault(); onSubmit(form) }}>{mode === 'signup' && <label>Full name<input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Your name" required /></label>}<label>Email address<input value={form.email} onChange={(event) => update('email', event.target.value)} placeholder="you@example.com" type="email" required /></label><label>Password<input value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="At least 8 characters" type="password" minLength="8" required /></label>{mode === 'signup' && <label>Workspace preview<select value={role} onChange={(event) => setRole(event.target.value)}><option value="customer">Customer</option><option value="owner">Restaurant owner</option><option value="driver">Driver</option><option value="admin">Admin</option></select><small className="field-hint">Partner applications stay pending until an admin approves them. Admin access is never granted from this form.</small></label>}{error && <div className="form-error"><AlertCircle size={15} /> {error}</div>}<button className="primary-button full-button" type="submit" disabled={loading}>{loading ? <><span className="spinner" /> Please wait…</> : mode === 'signin' ? 'Sign in' : 'Create account'}</button></form>{!isSupabaseConfigured && <div className="demo-auth-note"><Sparkles size={15} /><span>Preview mode is on. You can explore any role without a password.</span></div>}<p className="auth-legal">By continuing, you agree to our terms and privacy policy.</p></div></div>
+    <div className="modal-layer" onClick={onClose}><div className="auth-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close-floating" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button><div className="auth-brand"><span className="brand-mark">ae</span><span className="brand-word">adama<span>eats</span></span></div><span className="section-kicker">Welcome to the table</span><h2>{mode === 'signin' ? 'Good to see you' : 'Create your account'}</h2><p className="auth-intro">{mode === 'signin' ? 'Sign in to track orders and keep your favorites close.' : 'Create your account, then choose an owner or driver workspace to apply.'}</p><div className="auth-tabs"><button className={mode === 'signin' ? 'active' : ''} type="button" onClick={() => setMode('signin')}>Sign in</button><button className={mode === 'signup' ? 'active' : ''} type="button" onClick={() => setMode('signup')}>Create account</button></div><form className="auth-form" onSubmit={(event) => { event.preventDefault(); onSubmit(form) }}>{mode === 'signup' && <label>Full name<input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Your name" required /></label>}<label>Email address<input value={form.email} onChange={(event) => update('email', event.target.value)} placeholder="you@example.com" type="email" required /></label><label>Password<input value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="At least 8 characters" type="password" minLength="8" required /></label>{mode === 'signup' && <label>Account type<select value={role} onChange={(event) => setRole(event.target.value)}><option value="customer">Customer</option><option value="owner">Restaurant owner</option><option value="driver">Driver</option></select><small className="field-hint">Owner and driver accounts submit an application for admin review. Admin access is private.</small></label>}{error && <div className="form-error"><AlertCircle size={15} /> {error}</div>}<button className="primary-button full-button" type="submit" disabled={loading}>{loading ? <><span className="spinner" /> Please wait…</> : mode === 'signin' ? 'Sign in' : 'Create account'}</button></form>{!isSupabaseConfigured && <div className="demo-auth-note"><Sparkles size={15} /><span>Preview mode is on. You can explore any role without a password.</span></div>}<p className="auth-legal">By continuing, you agree to our terms and privacy policy.</p></div></div>
   )
 }
 
