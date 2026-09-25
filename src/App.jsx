@@ -60,6 +60,7 @@ import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashbo
 import PhoneAuthModal from './components/PhoneAuthModal'
 import PasswordResetModal from './components/PasswordResetModal'
 import AccountModal from './components/AccountModal'
+import RolePortal from './components/RolePortals'
 import {
   acceptDriverOrder as acceptLiveDriverOrder,
   approveDriver as approveLiveDriver,
@@ -209,7 +210,8 @@ function App() {
           : profile?.role
         if (profileRole) {
           setRole(profileRole)
-          setView(profileRole === 'customer' ? 'home' : 'dashboard')
+          setView(profileRole === 'customer' ? 'home' : 'portal')
+          window.history.replaceState(null, '', profileRole === 'customer' ? window.location.pathname : `#${profileRole}`)
         }
         requestedAccountType.current = null
       } catch {
@@ -312,8 +314,26 @@ function App() {
     setView(nextView)
     setSelectedRestaurant(null)
     setMobileMenuOpen(false)
+    if (nextView === 'portal' && role !== 'customer') window.history.replaceState(null, '', `#${role}`)
+    if (nextView === 'home') window.history.replaceState(null, '', window.location.pathname)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+
+  useEffect(() => {
+    const syncPortalHash = () => {
+      const requested = window.location.hash.replace(/^#\/?/, '').toLowerCase()
+      if (!requested || requested === 'customer') return
+      if (!['admin', 'owner', 'driver'].includes(requested)) return
+      if (user && accountProfile?.role === requested) {
+        if (view !== 'portal') navigate('portal')
+      } else if (!user) {
+        setAuthOpen(true)
+      }
+    }
+    syncPortalHash()
+    window.addEventListener('hashchange', syncPortalHash)
+    return () => window.removeEventListener('hashchange', syncPortalHash)
+  }, [accountProfile?.role, user, view])
 
   const openRestaurant = (restaurant) => {
     setSelectedRestaurant(restaurant)
@@ -364,7 +384,7 @@ function App() {
     if (nextRole === 'customer') {
       navigate('home')
     } else {
-      navigate('dashboard')
+      navigate('portal')
     }
   }
 
@@ -380,6 +400,7 @@ function App() {
     setUser(null)
     setRole('customer')
     setView('home')
+    window.history.replaceState(null, '', window.location.pathname)
     showToast('You have been signed out', 'info')
   }
 
@@ -657,38 +678,39 @@ function App() {
 
   return (
     <div className="app-shell">
-      <Header
-        t={t}
-        language={language}
-        setLanguage={setLanguage}
-        role={role}
-        accountRole={accountProfile?.role}
-        changeRole={changeRole}
-        cartCount={cartCount}
-        setCartOpen={setCartOpen}
-        setAuthOpen={setAuthOpen}
-        onAccount={openAccount}
-        user={user}
-        view={view}
-        navigate={navigate}
-        mobileMenuOpen={mobileMenuOpen}
-        setMobileMenuOpen={setMobileMenuOpen}
-        onBell={() => showToast('You are all caught up', 'info')}
-      />
+      {view !== 'portal' && (
+        <>
+          <Header
+            t={t}
+            language={language}
+            setLanguage={setLanguage}
+            role={role}
+            cartCount={cartCount}
+            setCartOpen={setCartOpen}
+            onAccount={openAccount}
+            user={user}
+            view={view}
+            navigate={navigate}
+            mobileMenuOpen={mobileMenuOpen}
+            setMobileMenuOpen={setMobileMenuOpen}
+            onBell={() => showToast('You are all caught up', 'info')}
+          />
 
-      <div className={`connection-banner ${isSupabaseConfigured ? 'connected' : ''}`}>
-        <div className="connection-inner">
-          <span className="connection-dot" />
-          <span>
-            {isSupabaseConfigured ? 'Supabase connected' : 'Preview mode · connect Supabase when you are ready'}
-          </span>
-          <button type="button" onClick={() => setAuthOpen(true)}>
-            {isSupabaseConfigured ? 'Manage account' : 'Connect account'} <ArrowRight size={14} />
-          </button>
-        </div>
-      </div>
+          <div className={`connection-banner ${isSupabaseConfigured ? 'connected' : ''}`}>
+            <div className="connection-inner">
+              <span className="connection-dot" />
+              <span>
+                {isSupabaseConfigured ? 'Supabase connected' : 'Preview mode · connect Supabase when you are ready'}
+              </span>
+              <button type="button" onClick={() => setAuthOpen(true)}>
+                {isSupabaseConfigured ? 'Manage account' : 'Connect account'} <ArrowRight size={14} />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
-      <main className="page-container">
+      <main className={view === 'portal' ? 'portal-page' : 'page-container'}>
         {view === 'home' && (
           <HomeView
             t={t}
@@ -713,18 +735,17 @@ function App() {
 
         {view === 'orders' && <OrdersView order={currentOrder} navigate={navigate} />}
 
-        {view === 'dashboard' && (
-          <DashboardView
+        {view === 'portal' && (
+          <RolePortal
             role={role}
-            navigate={navigate}
+            user={user}
+            profile={accountProfile}
+            ownerWorkspace={ownerWorkspace}
             ownerItems={ownerItems}
             addOwnerFood={addOwnerFood}
-            ownerWorkspace={ownerWorkspace}
             createRestaurant={handleCreateRestaurant}
             addOwnerFoodItem={handleAddOwnerFood}
             toggleOwnerFood={handleToggleOwnerFood}
-            driverOrders={driverOrders}
-            activeDriverOrder={activeDriverOrder}
             driverWorkspace={driverWorkspace}
             createDriverProfile={handleCreateDriverProfile}
             setDriverAvailability={handleSetDriverAvailability}
@@ -737,6 +758,8 @@ function App() {
             liveDriver={liveDriver}
             liveLoading={liveLoading}
             showToast={showToast}
+            navigate={navigate}
+            onAccount={openAccount}
           />
         )}
       </main>
@@ -799,11 +822,8 @@ function Header({
   language,
   setLanguage,
   role,
-  accountRole,
-  changeRole,
   cartCount,
   setCartOpen,
-  setAuthOpen,
   onAccount,
   user,
   view,
@@ -812,12 +832,7 @@ function Header({
   setMobileMenuOpen,
   onBell,
 }) {
-  const availableRoles = [
-    { value: 'customer', label: 'Customer view' },
-    { value: 'owner', label: 'Restaurant owner' },
-    { value: 'driver', label: 'Driver view' },
-    ...(accountRole === 'admin' ? [{ value: 'admin', label: 'Admin view' }] : []),
-  ]
+  const isPartner = Boolean(user && role !== 'customer')
 
   return (
     <header className="site-header">
@@ -840,22 +855,15 @@ function Header({
           <button className={view === 'orders' ? 'active' : ''} type="button" onClick={() => navigate('orders')}>
             {t.orders}
           </button>
-          {role !== 'customer' && (
-            <button className={view === 'dashboard' ? 'active' : ''} type="button" onClick={() => navigate('dashboard')}>
-              {t.dashboard}
+          {isPartner && (
+            <button className={view === 'portal' ? 'active' : ''} type="button" onClick={() => navigate('portal')}>
+              Open portal
             </button>
           )}
         </nav>
 
         <div className="header-actions">
-          <select
-            className="role-select"
-            value={role}
-            onChange={(event) => changeRole(event.target.value)}
-            aria-label="Choose a workspace"
-          >
-            {availableRoles.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          {isPartner && <button className="header-portal-button" type="button" onClick={() => navigate('portal')}><LayoutDashboard size={15} /> Open portal</button>}
           <button className="language-button" type="button" onClick={() => setLanguage(language === 'en' ? 'am' : 'en')}>
             <Languages size={16} />
             {language.toUpperCase()}
@@ -882,15 +890,9 @@ function Header({
         <div className="mobile-nav">
           <button type="button" onClick={() => navigate('home')}>Discover</button>
           <button type="button" onClick={() => navigate('orders')}>My orders</button>
-          {role !== 'customer' && <button type="button" onClick={() => navigate('dashboard')}>Dashboard</button>}
+          {isPartner && <button type="button" onClick={() => navigate('portal')}>Open partner portal</button>}
           <button type="button" onClick={onAccount}>{user ? 'My account' : 'Sign in / Create account'}</button>
           <div className="mobile-nav-divider" />
-          <label className="mobile-role-label">
-            Workspace
-            <select value={role} onChange={(event) => changeRole(event.target.value)}>
-              {availableRoles.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
         </div>
       )}
     </header>

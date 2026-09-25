@@ -326,6 +326,25 @@
   padding-left: 35px !important;
 }
 
+.header-portal-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--green-800);
+  border-radius: 10px;
+  background: var(--green-50);
+  color: var(--green-800);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.header-portal-button:hover {
+  background: var(--green-800);
+  color: white;
+}
+
 .forgot-password-button {
   display: block;
   margin: 0 0 13px auto;
