@@ -50,12 +50,11 @@ import {
   availableDriverOrders,
   categories,
   dashboardOrders,
-  getRestaurant,
   ownerMenu,
   pastOrders,
   restaurants,
 } from './data'
-import { createTelebirrPayment, isSupabaseConfigured, supabase } from './lib/supabase'
+import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
 
 const copy = {
   en: {
@@ -97,6 +96,10 @@ function formatETB(amount) {
   return `${Number(amount || 0).toLocaleString('en-ET')} ETB`
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''))
+}
+
 function useStoredCart() {
   const [cart, setCart] = useState(() => {
     try {
@@ -118,6 +121,7 @@ function App() {
   const t = copy[language]
   const [view, setView] = useState('home')
   const [selectedRestaurant, setSelectedRestaurant] = useState(null)
+  const [catalogRestaurants, setCatalogRestaurants] = useState(restaurants)
   const [cart, setCart] = useStoredCart()
   const [cartOpen, setCartOpen] = useState(false)
   const [checkoutOpen, setCheckoutOpen] = useState(false)
@@ -154,9 +158,18 @@ function App() {
     return () => listener?.subscription.unsubscribe()
   }, [])
 
+  useEffect(() => {
+    if (!supabase) return
+    fetchApprovedRestaurants()
+      .then((liveRestaurants) => {
+        if (liveRestaurants.length) setCatalogRestaurants(liveRestaurants)
+      })
+      .catch(() => {})
+  }, [])
+
   const filteredRestaurants = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return restaurants.filter((restaurant) => {
+    return catalogRestaurants.filter((restaurant) => {
       const matchesCategory =
         category === 'all' || restaurant.menu.some((item) => item.category === category)
       const matchesSearch =
@@ -166,7 +179,7 @@ function App() {
         restaurant.menu.some((item) => item.name.toLowerCase().includes(query))
       return matchesCategory && matchesSearch
     })
-  }, [category, search])
+  }, [catalogRestaurants, category, search])
 
   const cartCount = cart.reduce((total, item) => total + item.quantity, 0)
   const subtotal = cart.reduce((total, item) => total + item.price * item.quantity, 0)
@@ -276,10 +289,56 @@ function App() {
   }
 
   const handlePlaceOrder = async (details) => {
+    const firstItem = cart[0]
+    const liveCheckout = Boolean(supabase && isUuid(firstItem?.restaurantId))
+
+    if (liveCheckout && !user) {
+      throw new Error('Please sign in before placing a live order.')
+    }
+
+    let remoteOrder = null
+    let payment = { demo: true, transactionId: `DEMO-${Date.now()}` }
+
+    if (liveCheckout) {
+      const { data: orderRow, error: orderError } = await supabase
+        .from('orders')
+        .insert({
+          customer_id: user.id,
+          restaurant_id: firstItem.restaurantId,
+          status: 'pending_payment',
+          fulfillment_type: 'delivery',
+          subtotal,
+          delivery_fee: deliveryFee,
+          total,
+          delivery_address: details.address,
+          delivery_phone: details.phone,
+          customer_note: details.notes || null,
+        })
+        .select('id, order_number')
+        .single()
+
+      if (orderError) throw orderError
+
+      const { error: itemsError } = await supabase.from('order_items').insert(cart.map((item) => ({
+        order_id: orderRow.id,
+        food_item_id: isUuid(item.id) ? item.id : null,
+        item_name: item.name,
+        unit_price: item.price,
+        quantity: item.quantity,
+      })))
+      if (itemsError) throw itemsError
+
+      remoteOrder = orderRow
+      payment = await createTelebirrPayment({ orderId: orderRow.id, amount: total, currency: 'ETB' })
+    } else if (!supabase) {
+      payment = await createTelebirrPayment({ orderId: `demo-${Date.now()}`, amount: total, currency: 'ETB' })
+    }
+
+    const paidInDemo = payment?.demo || payment?.status === 'paid_demo'
     const newOrder = {
-      id: `AE-${Math.floor(1052 + Math.random() * 80)}`,
-      customer: details.name || 'Adama Eats customer',
-      restaurantName: cart[0]?.restaurantName || 'Your restaurant',
+      id: remoteOrder ? `AE-${remoteOrder.order_number}` : `AE-${Math.floor(1052 + Math.random() * 80)}`,
+      customer: details.name || user?.user_metadata?.full_name || 'Adama Eats customer',
+      restaurantName: firstItem?.restaurantName || 'Your restaurant',
       phone: details.phone,
       address: details.address,
       notes: details.notes,
@@ -288,8 +347,9 @@ function App() {
       deliveryFee,
       total,
       payment: 'Telebirr',
-      paymentStatus: 'Paid in demo mode',
-      statusIndex: 1,
+      paymentTransactionId: payment?.transactionId,
+      paymentStatus: paidInDemo ? 'Paid in demo mode' : 'Payment pending',
+      statusIndex: paidInDemo ? 1 : 0,
       placedAt: 'Just now',
       driver: null,
     }
@@ -299,7 +359,7 @@ function App() {
     setCheckoutOpen(false)
     setCartOpen(false)
     navigate('orders')
-    showToast('Order placed — your restaurant is getting started!')
+    showToast(remoteOrder ? 'Order placed — your restaurant is getting started!' : 'Demo order placed successfully!')
   }
 
   const addOwnerFood = (food) => {

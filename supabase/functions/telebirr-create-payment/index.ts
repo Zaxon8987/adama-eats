@@ -46,12 +46,37 @@ Deno.serve(async (request) => {
     // This explicit demo branch keeps local development usable without pretending
     // that a real Telebirr transaction has been verified.
     if (Deno.env.get('TELEBIRR_DEMO_MODE') === 'true') {
+      const transactionId = `DEMO-${order.order_number}`
+      const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+      if (serviceRoleKey) {
+        const admin = createClient(supabaseUrl, serviceRoleKey, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        })
+        const { error: paymentError } = await admin.from('payments').upsert({
+          order_id: order.id,
+          provider: 'telebirr',
+          provider_transaction_id: transactionId,
+          amount: order.total,
+          status: 'paid',
+          raw_payload: { demo: true },
+          paid_at: new Date().toISOString(),
+        }, { onConflict: 'provider,provider_transaction_id' })
+        if (paymentError) return json({ error: paymentError.message }, 500)
+
+        const { error: orderError } = await admin
+          .from('orders')
+          .update({ status: 'paid' })
+          .eq('id', order.id)
+        if (orderError) return json({ error: orderError.message }, 500)
+      }
+
       return json({
         demo: true,
         orderId: order.id,
-        transactionId: `DEMO-${order.order_number}`,
+        transactionId,
         amount: order.total,
-        status: 'pending_demo',
+        status: 'paid_demo',
         message: 'Demo payment created. Replace this branch with the approved Telebirr API flow.',
       })
     }
