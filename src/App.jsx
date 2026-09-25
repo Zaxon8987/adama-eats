@@ -882,6 +882,7 @@ function Header({
           <button type="button" onClick={() => navigate('home')}>Discover</button>
           <button type="button" onClick={() => navigate('orders')}>My orders</button>
           {role !== 'customer' && <button type="button" onClick={() => navigate('dashboard')}>Dashboard</button>}
+          <button type="button" onClick={onAccount}>{user ? 'My account' : 'Sign in / Create account'}</button>
           <div className="mobile-nav-divider" />
           <label className="mobile-role-label">
             Workspace
