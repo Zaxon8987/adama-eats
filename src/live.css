@@ -311,6 +311,42 @@
   font-size: 10px;
 }
 
+.phone-input-wrap {
+  position: relative;
+}
+
+.phone-input-wrap svg {
+  position: absolute;
+  top: 12px;
+  left: 11px;
+  color: var(--green-700);
+}
+
+.phone-input-wrap input {
+  padding-left: 35px !important;
+}
+
+.otp-input {
+  letter-spacing: .28em;
+  text-align: center;
+}
+
+.auth-back-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 13px;
+  padding: 0;
+  background: transparent;
+  color: var(--green-700);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.auth-back-button:hover {
+  color: var(--orange-dark);
+}
+
 @media (max-width: 600px) {
   .onboarding-panel {
     padding: 28px 20px 25px;

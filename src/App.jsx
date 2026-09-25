@@ -56,6 +56,7 @@ import {
 } from './data'
 import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
 import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashboards'
+import PhoneAuthModal from './components/PhoneAuthModal'
 import {
   acceptDriverOrder as acceptLiveDriverOrder,
   approveDriver as approveLiveDriver,
@@ -116,6 +117,13 @@ function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''))
 }
 
+function normalizeEthiopianPhone(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (digits.startsWith('0')) return `+251${digits.slice(1)}`
+  if (digits.startsWith('251')) return `+${digits}`
+  return value
+}
+
 function useStoredCart() {
   const [cart, setCart] = useState(() => {
     try {
@@ -153,9 +161,10 @@ function App() {
   const [approvalItems, setApprovalItems] = useState(approvalRequests)
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState('signin')
+  const [authStage, setAuthStage] = useState('phone')
   const [authRole, setAuthRole] = useState('customer')
+  const [authForm, setAuthForm] = useState({ name: '', phone: '', code: '' })
   const requestedAccountType = useRef(null)
-  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [user, setUser] = useState(null)
@@ -354,46 +363,55 @@ function App() {
     }
   }
 
+  const closeAuth = () => {
+    setAuthOpen(false)
+    setAuthStage('phone')
+    setAuthError('')
+    setAuthForm({ name: '', phone: '', code: '' })
+  }
+
   const handleAuth = async (form) => {
     setAuthError('')
     setAuthLoading(true)
+    const phone = normalizeEthiopianPhone(form.phone)
+
     try {
       if (!supabase) {
         setRole(authRole)
-        setAuthOpen(false)
+        closeAuth()
         navigate(authRole === 'customer' ? 'home' : 'dashboard')
         showToast(`Demo ${roleLabels[authRole].toLowerCase()} enabled`)
         return
       }
 
-      if (authMode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({
-          email: form.email,
-          password: form.password,
-          options: { data: { full_name: form.name } },
-        })
-        if (error) {
-          requestedAccountType.current = null
-          throw error
-        }
-        if (!data.session) {
-          requestedAccountType.current = null
-          setAuthError('Check your email to confirm your account, then sign in.')
-          return
-        }
-        requestedAccountType.current = authRole
-        setRole(authRole)
-        if (authRole !== 'customer') navigate('dashboard')
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: form.email,
-          password: form.password,
+      if (authStage === 'phone') {
+        if (!form.phone) throw new Error('Enter your phone number first.')
+        const { error } = await supabase.auth.signInWithOtp({
+          phone,
+          options: {
+            shouldCreateUser: authMode === 'signup',
+            data: authMode === 'signup' ? { full_name: form.name } : undefined,
+          },
         })
         if (error) throw error
+        setAuthForm((current) => ({ ...current, phone }))
+        setAuthStage('otp')
+        return
       }
 
-      setAuthOpen(false)
-      showToast(authMode === 'signup' ? 'Account created. Choose Owner or Driver in the role selector to apply.' : 'Welcome back to Adama Eats')
+      if (!form.code) throw new Error('Enter the verification code sent to your phone.')
+      if (authMode === 'signup') requestedAccountType.current = authRole
+      const { data, error } = await supabase.auth.verifyOtp({ phone, token: form.code, type: 'sms' })
+      if (error) {
+        requestedAccountType.current = null
+        throw error
+      }
+      if (!data.session) throw new Error('The verification session could not be created.')
+
+      setRole(authRole)
+      closeAuth()
+      navigate(authRole === 'customer' ? 'home' : 'dashboard')
+      showToast(authMode === 'signup' ? 'Phone account verified successfully' : 'Welcome back to Adama Eats')
     } catch (error) {
       setAuthError(error.message || 'Unable to authenticate right now.')
     } finally {
@@ -733,17 +751,16 @@ function App() {
       )}
 
       {authOpen && (
-        <AuthModal
+        <PhoneAuthModal
           mode={authMode}
           setMode={setAuthMode}
           form={authForm}
           setForm={setAuthForm}
+          stage={authStage}
+          setStage={setAuthStage}
           role={authRole}
           setRole={setAuthRole}
-          onClose={() => {
-            setAuthOpen(false)
-            setAuthError('')
-          }}
+          onClose={closeAuth}
           onSubmit={handleAuth}
           loading={authLoading}
           error={authError}
@@ -1166,13 +1183,6 @@ function DriverDashboard({ driverOrders, activeDriverOrder, acceptDriverOrder, s
       <div className="driver-summary-row"><div className="driver-summary-copy"><span className="section-kicker">Your day</span><h2>{driverOrders.length} orders nearby</h2><p>Accept an order only when it fits your route.</p></div><div className="driver-earnings"><span>Today’s earnings</span><strong>ETB 540</strong><small>+18% from last Tuesday</small></div></div>
       <section className="dashboard-panel available-orders-panel"><div className="panel-heading"><div><span className="section-kicker">Near Adama center</span><h2>Available orders</h2></div><button className="date-select" type="button" onClick={() => showToast('Orders refreshed', 'success')}><RefreshCw size={14} /> Refresh</button></div>{driverOrders.length ? <div className="available-order-list">{driverOrders.map((order) => <article className="available-order-card" key={order.id}><div className="available-order-main"><div className="available-order-id"><span className="order-bag-icon"><ShoppingBag size={17} /></span><span><strong>{order.id}</strong><small>{order.time || 'Just now'}</small></span></div><div className="available-route"><div><Store size={14} /><span>{order.pickup}</span></div><div><MapPin size={14} /><span>{order.dropoff}</span></div></div><div className="available-order-meta"><span><Bike size={14} /> {order.distance}</span><span><Clock3 size={14} /> {order.eta}</span></div></div><div className="available-order-side"><strong>{formatETB(order.fee)}</strong><small>delivery fee</small><button className="primary-button small-primary" type="button" onClick={() => acceptDriverOrder(order)}>Accept <Check size={15} /></button></div></article>)}</div> : <div className="panel-empty"><Bike size={24} /><strong>No available orders</strong><span>Keep this page open and new requests will appear here.</span></div>}</section>
     </>
-  )
-}
-
-function AuthModal({ mode, setMode, form, setForm, role, setRole, onClose, onSubmit, loading, error }) {
-  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }))
-  return (
-    <div className="modal-layer" onClick={onClose}><div className="auth-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close-floating" type="button" onClick={onClose} aria-label="Close"><X size={18} /></button><div className="auth-brand"><span className="brand-mark">ae</span><span className="brand-word">adama<span>eats</span></span></div><span className="section-kicker">Welcome to the table</span><h2>{mode === 'signin' ? 'Good to see you' : 'Create your account'}</h2><p className="auth-intro">{mode === 'signin' ? 'Sign in to track orders and keep your favorites close.' : 'Create your account, then choose an owner or driver workspace to apply.'}</p><div className="auth-tabs"><button className={mode === 'signin' ? 'active' : ''} type="button" onClick={() => setMode('signin')}>Sign in</button><button className={mode === 'signup' ? 'active' : ''} type="button" onClick={() => setMode('signup')}>Create account</button></div><form className="auth-form" onSubmit={(event) => { event.preventDefault(); onSubmit(form) }}>{mode === 'signup' && <label>Full name<input value={form.name} onChange={(event) => update('name', event.target.value)} placeholder="Your name" required /></label>}<label>Email address<input value={form.email} onChange={(event) => update('email', event.target.value)} placeholder="you@example.com" type="email" required /></label><label>Password<input value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="At least 8 characters" type="password" minLength="8" required /></label>{mode === 'signup' && <label>Account type<select value={role} onChange={(event) => setRole(event.target.value)}><option value="customer">Customer</option><option value="owner">Restaurant owner</option><option value="driver">Driver</option></select><small className="field-hint">Owner and driver accounts submit an application for admin review. Admin access is private.</small></label>}{error && <div className="form-error"><AlertCircle size={15} /> {error}</div>}<button className="primary-button full-button" type="submit" disabled={loading}>{loading ? <><span className="spinner" /> Please wait…</> : mode === 'signin' ? 'Sign in' : 'Create account'}</button></form>{!isSupabaseConfigured && <div className="demo-auth-note"><Sparkles size={15} /><span>Preview mode is on. You can explore any role without a password.</span></div>}<p className="auth-legal">By continuing, you agree to our terms and privacy policy.</p></div></div>
   )
 }
 

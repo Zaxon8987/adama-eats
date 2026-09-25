@@ -82,6 +82,10 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 - **Driver:** accept available orders and update delivery status
 - **Admin:** approve owners/drivers and monitor the platform
 
+## Phone authentication
+
+Public sign-in and account creation use Ethiopian phone numbers with a one-time SMS code. Enable the **Phone** provider in Supabase Authentication and connect an SMS provider (Twilio or MessageBird) before testing real phone verification. SMS delivery is not included in the Supabase database free plan and may incur provider charges.
+
 ## Partner onboarding
 
 1. Create a customer account from the site.
