@@ -11,9 +11,9 @@ The first version is a Vite + React frontend with Supabase-ready authentication,
 - Cart and ETB checkout flow
 - Telebirr payment placeholder with a secure Edge Function boundary
 - Customer order tracking view
-- Admin dashboard preview
-- Restaurant-owner dashboard preview with food-upload form
-- Driver dashboard preview with available-order acceptance
+- Admin dashboard with live approval actions
+- Restaurant-owner onboarding, menu uploads, pricing, and availability controls
+- Driver onboarding, availability controls, and atomic order acceptance
 - Amharic/English UI switcher foundation
 - Responsive mobile navigation and cart drawer
 - GitHub Pages deployment workflow
@@ -81,6 +81,16 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 - **Restaurant owner:** manage an approved restaurant, menu, prices, images, and delivery fees
 - **Driver:** accept available orders and update delivery status
 - **Admin:** approve owners/drivers and monitor the platform
+
+## Partner onboarding
+
+1. Create a customer account from the site.
+2. Use the role selector to open the Restaurant owner or Driver workspace.
+3. Submit the restaurant or driver application.
+4. An admin reviews the pending request and approves or rejects it.
+5. Approved partners can manage live Supabase records through the dashboard.
+
+Admin accounts should be promoted from the Supabase Dashboard rather than through a public signup field. Never allow a browser-controlled role value to grant admin access.
 
 ## Production notes
 
