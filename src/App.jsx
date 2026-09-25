@@ -161,9 +161,8 @@ function App() {
   const [approvalItems, setApprovalItems] = useState(approvalRequests)
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState('signin')
-  const [authStage, setAuthStage] = useState('phone')
   const [authRole, setAuthRole] = useState('customer')
-  const [authForm, setAuthForm] = useState({ name: '', phone: '', code: '' })
+  const [authForm, setAuthForm] = useState({ name: '', phone: '', password: '' })
   const requestedAccountType = useRef(null)
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
@@ -365,9 +364,8 @@ function App() {
 
   const closeAuth = () => {
     setAuthOpen(false)
-    setAuthStage('phone')
     setAuthError('')
-    setAuthForm({ name: '', phone: '', code: '' })
+    setAuthForm({ name: '', phone: '', password: '' })
   }
 
   const handleAuth = async (form) => {
@@ -384,34 +382,34 @@ function App() {
         return
       }
 
-      if (authStage === 'phone') {
-        if (!form.phone) throw new Error('Enter your phone number first.')
-        const { error } = await supabase.auth.signInWithOtp({
+      if (!form.phone || !form.password) throw new Error('Enter your phone number and password.')
+      if (authMode === 'signup') {
+        if (!form.name) throw new Error('Enter your full name.')
+        requestedAccountType.current = authRole
+        const { data, error } = await supabase.auth.signUp({
           phone,
-          options: {
-            shouldCreateUser: authMode === 'signup',
-            data: authMode === 'signup' ? { full_name: form.name } : undefined,
-          },
+          password: form.password,
+          options: { data: { full_name: form.name } },
         })
+        if (error) {
+          requestedAccountType.current = null
+          throw error
+        }
+        if (!data.session) {
+          requestedAccountType.current = null
+          setAuthError('Your account was created. Please sign in with your phone number and password.')
+          setAuthMode('signin')
+          return
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ phone, password: form.password })
         if (error) throw error
-        setAuthForm((current) => ({ ...current, phone }))
-        setAuthStage('otp')
-        return
       }
-
-      if (!form.code) throw new Error('Enter the verification code sent to your phone.')
-      if (authMode === 'signup') requestedAccountType.current = authRole
-      const { data, error } = await supabase.auth.verifyOtp({ phone, token: form.code, type: 'sms' })
-      if (error) {
-        requestedAccountType.current = null
-        throw error
-      }
-      if (!data.session) throw new Error('The verification session could not be created.')
 
       setRole(authRole)
       closeAuth()
       navigate(authRole === 'customer' ? 'home' : 'dashboard')
-      showToast(authMode === 'signup' ? 'Phone account verified successfully' : 'Welcome back to Adama Eats')
+      showToast(authMode === 'signup' ? 'Phone account created successfully' : 'Welcome back to Adama Eats')
     } catch (error) {
       setAuthError(error.message || 'Unable to authenticate right now.')
     } finally {
@@ -756,8 +754,6 @@ function App() {
           setMode={setAuthMode}
           form={authForm}
           setForm={setAuthForm}
-          stage={authStage}
-          setStage={setAuthStage}
           role={authRole}
           setRole={setAuthRole}
           onClose={closeAuth}

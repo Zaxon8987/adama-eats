@@ -84,7 +84,7 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 
 ## Phone authentication
 
-Public sign-in and account creation use Ethiopian phone numbers with a one-time SMS code. Enable the **Phone** provider in Supabase Authentication and connect an SMS provider (Twilio or MessageBird) before testing real phone verification. SMS delivery is not included in the Supabase database free plan and may incur provider charges.
+Public sign-in and account creation use Ethiopian phone numbers with a password. SMS verification is intentionally disabled for the MVP, so no OTP or SMS provider is required. Supabase still needs the Phone provider enabled for phone/password identities. Add rate limiting and a phone verification/recovery flow before production launch.
 
 ## Partner onboarding
 
