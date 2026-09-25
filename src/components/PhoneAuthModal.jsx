@@ -7,6 +7,7 @@ export default function PhoneAuthModal({
   setForm,
   role,
   setRole,
+  onReset,
   onClose,
   onSubmit,
   loading,
@@ -34,6 +35,7 @@ export default function PhoneAuthModal({
           <label>Phone number<div className="phone-input-wrap"><Phone size={16} /><input value={form.phone} onChange={(event) => update('phone', event.target.value)} placeholder="09xx xxx xxx" type="tel" inputMode="tel" autoComplete="tel" required /></div></label>
           <label>Password<div className="phone-input-wrap"><KeyRound size={16} /><input value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="At least 8 characters" type="password" minLength="8" autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} required /></div></label>
           {mode === 'signup' && <label>Account type<select value={role} onChange={(event) => setRole(event.target.value)}><option value="customer">Customer</option><option value="owner">Restaurant owner</option><option value="driver">Driver</option></select><small className="field-hint">Owner and driver applications are reviewed by an admin. Admin access is private.</small></label>}
+          {mode === 'signin' && <button className="forgot-password-button" type="button" onClick={onReset}>Forgot password?</button>}
           <button className="primary-button full-button" type="submit" disabled={loading}>{loading ? <><span className="spinner" /> Please wait…</> : <>{mode === 'signin' ? 'Sign in with phone' : 'Create account'} <CheckCircle2 size={16} /></>}</button>
         </form>
 

@@ -55,8 +55,11 @@ import {
   restaurants,
 } from './data'
 import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
+import { checkLoginRateLimit } from './lib/authSecurity'
 import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashboards'
 import PhoneAuthModal from './components/PhoneAuthModal'
+import PasswordResetModal from './components/PasswordResetModal'
+import AccountModal from './components/AccountModal'
 import {
   acceptDriverOrder as acceptLiveDriverOrder,
   approveDriver as approveLiveDriver,
@@ -160,6 +163,8 @@ function App() {
   const [activeDriverOrder, setActiveDriverOrder] = useState(null)
   const [approvalItems, setApprovalItems] = useState(approvalRequests)
   const [authOpen, setAuthOpen] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
   const [authMode, setAuthMode] = useState('signin')
   const [authRole, setAuthRole] = useState('customer')
   const [authForm, setAuthForm] = useState({ name: '', phone: '', password: '' })
@@ -362,6 +367,21 @@ function App() {
     }
   }
 
+  const openAccount = () => {
+    if (user) setAccountOpen(true)
+    else setAuthOpen(true)
+  }
+
+  const signOut = async () => {
+    await supabase?.auth.signOut()
+    setAccountOpen(false)
+    setAccountProfile(null)
+    setUser(null)
+    setRole('customer')
+    setView('home')
+    showToast('You have been signed out', 'info')
+  }
+
   const closeAuth = () => {
     setAuthOpen(false)
     setAuthError('')
@@ -372,6 +392,7 @@ function App() {
     setAuthError('')
     setAuthLoading(true)
     const phone = normalizeEthiopianPhone(form.phone)
+    let rateLimitAttempted = false
 
     try {
       if (!supabase) {
@@ -383,8 +404,13 @@ function App() {
       }
 
       if (!form.phone || !form.password) throw new Error('Enter your phone number and password.')
+      if (authMode === 'signup' && !form.name) throw new Error('Enter your full name.')
+
+      const rateLimit = await checkLoginRateLimit(supabase, phone, 'check')
+      if (!rateLimit.allowed) throw new Error(rateLimit.message || 'Too many login attempts. Try again later.')
+      rateLimitAttempted = true
+
       if (authMode === 'signup') {
-        if (!form.name) throw new Error('Enter your full name.')
         requestedAccountType.current = authRole
         const { data, error } = await supabase.auth.signUp({
           phone,
@@ -406,11 +432,13 @@ function App() {
         if (error) throw error
       }
 
+      await checkLoginRateLimit(supabase, phone, 'success')
       setRole(authRole)
       closeAuth()
       navigate(authRole === 'customer' ? 'home' : 'dashboard')
       showToast(authMode === 'signup' ? 'Phone account created successfully' : 'Welcome back to Adama Eats')
     } catch (error) {
+      if (rateLimitAttempted) await checkLoginRateLimit(supabase, phone, 'failure').catch(() => {})
       setAuthError(error.message || 'Unable to authenticate right now.')
     } finally {
       setAuthLoading(false)
@@ -646,6 +674,7 @@ function App() {
         cartCount={cartCount}
         setCartOpen={setCartOpen}
         setAuthOpen={setAuthOpen}
+        onAccount={openAccount}
         user={user}
         view={view}
         navigate={navigate}
@@ -756,12 +785,16 @@ function App() {
           setForm={setAuthForm}
           role={authRole}
           setRole={setAuthRole}
+          onReset={() => { setAuthOpen(false); setResetOpen(true) }}
           onClose={closeAuth}
           onSubmit={handleAuth}
           loading={authLoading}
           error={authError}
         />
       )}
+
+      {resetOpen && <PasswordResetModal onClose={() => setResetOpen(false)} showToast={showToast} />}
+      {accountOpen && user && <AccountModal user={user} profile={accountProfile} onClose={() => setAccountOpen(false)} onVerified={() => fetchProfile(user.id).then(setAccountProfile).catch(() => {})} onSignOut={signOut} showToast={showToast} />}
 
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
@@ -778,6 +811,7 @@ function Header({
   cartCount,
   setCartOpen,
   setAuthOpen,
+  onAccount,
   user,
   view,
   navigate,
@@ -842,7 +876,7 @@ function Header({
             <span className="cart-button-label">Cart</span>
             <span className="cart-count">{cartCount}</span>
           </button>
-          <button className="avatar-button" type="button" onClick={() => setAuthOpen(true)} aria-label="Account">
+          <button className="avatar-button" type="button" onClick={onAccount} aria-label="Account">
             {user?.user_metadata?.full_name ? user.user_metadata.full_name.slice(0, 1).toUpperCase() : <UserRound size={17} />}
           </button>
           <button className="mobile-menu-button" type="button" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-label="Menu">

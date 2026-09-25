@@ -84,7 +84,7 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 
 ## Phone authentication
 
-Public sign-in and account creation use Ethiopian phone numbers with a password. SMS verification is intentionally disabled for the MVP, so no OTP or SMS provider is required. Supabase still needs the Phone provider enabled for phone/password identities. Add rate limiting and a phone verification/recovery flow before production launch.
+Public sign-in and account creation use Ethiopian phone numbers with a password. SMS verification is intentionally disabled for normal login. The forgot-password flow uses a temporary phone code, so configure Supabase Phone/SMS delivery before using recovery in production. Login attempts are checked by the `login-rate-limit` Edge Function. Optional phone verification can later mark `profiles.phone_verified_at` through the `mark-phone-verified` Edge Function.
 
 ## Partner onboarding
 

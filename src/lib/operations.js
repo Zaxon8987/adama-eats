@@ -40,7 +40,7 @@ export async function fetchProfile(userId) {
   if (!supabase || !userId) return null
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, full_name, phone, role, is_active')
+    .select('id, full_name, phone, phone_verified_at, role, is_active')
     .eq('id', userId)
     .maybeSingle()
   if (error) throw error
