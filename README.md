@@ -82,6 +82,29 @@ Do not add Telebirr secrets to the frontend repository variables. Store them as 
 - **Driver:** accept available orders and update delivery status
 - **Admin:** approve owners/drivers and monitor the platform
 
+## Portals and sign in pages
+
+Every account type has its own sign in page, and a portal link never opens a portal without a matching session.
+
+| Link | Screen |
+| --- | --- |
+| `/` | Customer marketplace |
+| `#login/customer` | Customer sign in page |
+| `#login/owner` | Restaurant partner sign in page |
+| `#login/driver` | Driver sign in page |
+| `#login/admin` | Private admin sign in page (no public sign up) |
+| `#admin`, `#owner`, `#driver` | Portal request: opens the matching sign in page when there is no session, the portal when the account role matches, and an access restricted page when it does not |
+
+Routing rules live in `src/lib/portalRouting.js` and are covered by `npm test`:
+
+- The database profile role always decides the workspace.
+- A requested portal is refused for any other account and reported as `denied`.
+- The account type used to sign in is remembered for the browser session so a new
+  restaurant owner or driver can finish onboarding, and a pending application
+  keeps its workspace across reloads. It is cleared on sign out.
+- Admin access is never granted by a browser value, only by the `profiles.role`
+  column in the database.
+
 ## Phone authentication
 
 Public sign-in and account creation use Ethiopian phone numbers with a password. The app uses a server-side phone-alias identity, so users never enter or see an email address and normal login does not require SMS delivery. The `phone-password-signup` Edge Function creates the confirmed internal account; the browser then signs in through Supabase Auth.
@@ -90,13 +113,20 @@ The forgot-password flow currently uses a temporary phone code, so configure Sup
 
 ## Partner onboarding
 
-1. Create a customer account from the site.
-2. Use the role selector to open the Restaurant owner or Driver workspace.
+1. Open `#login/owner` or `#login/driver` and create an account with that phone number.
+2. The partner workspace opens with the application form.
 3. Submit the restaurant or driver application.
 4. An admin reviews the pending request and approves or rejects it.
 5. Approved partners can manage live Supabase records through the dashboard.
 
 Admin accounts should be promoted from the Supabase Dashboard rather than through a public signup field. Never allow a browser-controlled role value to grant admin access.
+
+## Tests
+
+```bash
+npm test        # portal routing rules, role login pages, first paint per link
+npm run build   # production bundle
+```
 
 ## Production notes
 

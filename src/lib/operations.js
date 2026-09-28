@@ -47,6 +47,22 @@ export async function fetchProfile(userId) {
   return data
 }
 
+// Light check used by the portal guard: does this account own a restaurant
+// application or a driver record, even while the profile role is still customer?
+export async function fetchPartnerAccess(userId) {
+  if (!supabase || !userId) return { hasRestaurant: false, hasDriverProfile: false }
+
+  const [restaurantsResult, driverResult] = await Promise.all([
+    supabase.from('restaurants').select('id').eq('owner_id', userId).limit(1),
+    supabase.from('driver_profiles').select('id').eq('id', userId).limit(1),
+  ])
+
+  return {
+    hasRestaurant: Boolean(restaurantsResult.data?.length),
+    hasDriverProfile: Boolean(driverResult.data?.length),
+  }
+}
+
 export async function fetchOwnerWorkspace(userId) {
   if (!supabase || !userId) return { restaurant: null, categories: [], foodItems: [] }
 

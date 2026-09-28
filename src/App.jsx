@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertCircle,
   ArrowLeft,
@@ -56,11 +56,19 @@ import {
 } from './data'
 import { createTelebirrPayment, fetchApprovedRestaurants, isSupabaseConfigured, supabase } from './lib/supabase'
 import { checkLoginRateLimit, phoneAliasEmail, signUpWithPhone } from './lib/authSecurity'
+import {
+  readHashLoginRole,
+  readHashRole,
+  readIntendedRole,
+  resolvePortalAccess,
+  writeIntendedRole,
+} from './lib/portalRouting'
 import { LiveDriverDashboard, LiveOwnerDashboard } from './components/LiveDashboards'
-import PhoneAuthModal from './components/PhoneAuthModal'
 import PasswordResetModal from './components/PasswordResetModal'
 import AccountModal from './components/AccountModal'
 import RolePortal from './components/RolePortals'
+import RoleLoginPage from './components/RoleLoginPage'
+import AccessDeniedPage from './components/AccessDeniedPage'
 import {
   acceptDriverOrder as acceptLiveDriverOrder,
   approveDriver as approveLiveDriver,
@@ -71,6 +79,7 @@ import {
   fetchAdminApprovals,
   fetchDriverWorkspace,
   fetchOwnerWorkspace,
+  fetchPartnerAccess,
   fetchProfile,
   setDriverAvailability,
   updateDriverOrderStatus,
@@ -148,7 +157,9 @@ function useStoredCart() {
 function App() {
   const [language, setLanguage] = useState('en')
   const t = copy[language]
-  const [view, setView] = useState('home')
+  // A portal link never renders the portal on the first paint: it starts on the
+  // matching login page until the session is verified.
+  const [view, setView] = useState(() => (readHashRole(window.location.hash) || readHashLoginRole(window.location.hash) ? 'login' : 'home'))
   const [selectedRestaurant, setSelectedRestaurant] = useState(null)
   const [catalogRestaurants, setCatalogRestaurants] = useState(restaurants)
   const [cart, setCart] = useStoredCart()
@@ -164,15 +175,16 @@ function App() {
   const [driverOrders, setDriverOrders] = useState(availableDriverOrders)
   const [activeDriverOrder, setActiveDriverOrder] = useState(null)
   const [approvalItems, setApprovalItems] = useState(approvalRequests)
-  const [authOpen, setAuthOpen] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
   const [accountOpen, setAccountOpen] = useState(false)
+  const [loginRole, setLoginRole] = useState(() => readHashLoginRole(window.location.hash) || readHashRole(window.location.hash) || 'customer')
+  const [accessDenied, setAccessDenied] = useState(null)
   const [authMode, setAuthMode] = useState('signin')
   const [authRole, setAuthRole] = useState('customer')
   const [authForm, setAuthForm] = useState({ name: '', phone: '', password: '' })
-  const requestedAccountType = useRef(null)
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
+  const [authReady, setAuthReady] = useState(!supabase)
   const [user, setUser] = useState(null)
   const [accountProfile, setAccountProfile] = useState(null)
   const [ownerWorkspace, setOwnerWorkspace] = useState({ restaurant: null, categories: [], foodItems: [] })
@@ -186,6 +198,23 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  // Resolves which workspace an authenticated account is allowed to open.
+  // The database profile role always wins. Partner applications that are still
+  // pending (profile role is still customer) are matched against real rows so a
+  // restaurant owner or driver keeps their workspace across reloads.
+  const resolvePortalRole = async (nextUser, profile, requestedRole = null) => {
+    const profileRole = profile?.role || 'customer'
+    const intendedRole = readIntendedRole()
+    const target = requestedRole || intendedRole
+
+    let hasRestaurant = false
+    let hasDriverProfile = false
+    if (target === 'owner' && profileRole !== 'owner') hasRestaurant = await fetchPartnerAccess(nextUser.id).then((access) => access.hasRestaurant).catch(() => false)
+    if (target === 'driver' && profileRole !== 'driver') hasDriverProfile = await fetchPartnerAccess(nextUser.id).then((access) => access.hasDriverProfile).catch(() => false)
+
+    return resolvePortalAccess({ profileRole, requestedRole, intendedRole, hasRestaurant, hasDriverProfile })
+  }
+
   useEffect(() => {
     if (!supabase) return undefined
     let active = true
@@ -194,10 +223,12 @@ function App() {
       if (!active) return
       setUser(nextUser || null)
       if (!nextUser) {
-        requestedAccountType.current = null
+        writeIntendedRole(null)
         setAccountProfile(null)
+        setAccessDenied(null)
         setRole('customer')
         setView('home')
+        setAuthReady(true)
         return
       }
 
@@ -205,21 +236,29 @@ function App() {
         const profile = await fetchProfile(nextUser.id)
         if (!active) return
         setAccountProfile(profile)
-        const profileRole = requestedAccountType.current && profile?.role === 'customer'
-          ? requestedAccountType.current
-          : profile?.role
-        if (profileRole) {
-          setRole(profileRole)
-          setView(profileRole === 'customer' ? 'home' : 'portal')
-          window.history.replaceState(null, '', profileRole === 'customer' ? window.location.pathname : `#${profileRole}`)
+        const { role: resolvedRole, denied } = await resolvePortalRole(nextUser, profile, readHashRole(window.location.hash))
+        if (!active) return
+        setRole(resolvedRole)
+        setAuthRole(resolvedRole)
+        if (denied) {
+          setAccessDenied(denied)
+          setView('access-denied')
+          return
         }
-        requestedAccountType.current = null
+        setAccessDenied(null)
+        setView(resolvedRole === 'customer' ? 'home' : 'portal')
+        window.history.replaceState(null, '', resolvedRole === 'customer' ? window.location.pathname : `#${resolvedRole}`)
       } catch {
         if (active) setAccountProfile(null)
+      } finally {
+        if (active) setAuthReady(true)
       }
     }
 
-    supabase.auth.getUser().then(({ data }) => loadUserProfile(data.user || null)).catch(() => {})
+    supabase.auth
+      .getUser()
+      .then(({ data }) => loadUserProfile(data.user || null))
+      .catch(() => setAuthReady(true))
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       loadUserProfile(session?.user || null)
     })
@@ -310,30 +349,62 @@ function App() {
 
   const showToast = (message, tone = 'success') => setToast({ message, tone })
 
-  const navigate = (nextView) => {
+  const navigate = (nextView, roleOverride) => {
+    const targetRole = roleOverride || role
     setView(nextView)
     setSelectedRestaurant(null)
     setMobileMenuOpen(false)
-    if (nextView === 'portal' && role !== 'customer') window.history.replaceState(null, '', `#${role}`)
+    if (nextView === 'portal' && targetRole !== 'customer') window.history.replaceState(null, '', `#${targetRole}`)
+    if (nextView === 'login') window.history.replaceState(null, '', `#login/${loginRole}`)
+    if (nextView === 'access-denied') window.history.replaceState(null, '', `#${accessDenied || targetRole}`)
     if (nextView === 'home') window.history.replaceState(null, '', window.location.pathname)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   useEffect(() => {
+    if (!authReady) return undefined
+    let cancelled = false
+
     const syncPortalHash = () => {
-      const requested = window.location.hash.replace(/^#\/?/, '').toLowerCase()
+      const requested = readHashRole(window.location.hash)
       if (!requested || requested === 'customer') return
-      if (!['admin', 'owner', 'driver'].includes(requested)) return
-      if (user && accountProfile?.role === requested) {
-        if (view !== 'portal') navigate('portal')
-      } else if (!user) {
-        setAuthOpen(true)
+
+      // No session yet for this portal: show the matching login page, never the portal.
+      if (!user) {
+        openRoleLogin(requested)
+        return
       }
+
+      const applyResult = async () => {
+        if (accountProfile?.role === requested) {
+          setRole(requested)
+          setAuthRole(requested)
+          if (view !== 'portal') navigate('portal', requested)
+          return
+        }
+        const { role: resolvedRole, denied } = await resolvePortalRole(user, accountProfile, requested)
+        if (cancelled) return
+        if (denied) {
+          setAccessDenied(denied)
+          setView('access-denied')
+          return
+        }
+        setAccessDenied(null)
+        setRole(resolvedRole)
+        setAuthRole(resolvedRole)
+        navigate('portal', resolvedRole)
+      }
+
+      applyResult()
     }
+
     syncPortalHash()
     window.addEventListener('hashchange', syncPortalHash)
-    return () => window.removeEventListener('hashchange', syncPortalHash)
-  }, [accountProfile?.role, user, view])
+    return () => {
+      cancelled = true
+      window.removeEventListener('hashchange', syncPortalHash)
+    }
+  }, [accountProfile, authReady, user, view])
 
   const openRestaurant = (restaurant) => {
     setSelectedRestaurant(restaurant)
@@ -378,19 +449,21 @@ function App() {
 
   const removeFromCart = (id) => setCart((current) => current.filter((item) => item.id !== id))
 
-  const changeRole = (nextRole) => {
-    setRole(nextRole)
-    setMobileMenuOpen(false)
-    if (nextRole === 'customer') {
-      navigate('home')
-    } else {
-      navigate('portal')
-    }
+  const openRoleLogin = (requestedRole = 'customer') => {
+    setLoginRole(requestedRole)
+    setAuthRole(requestedRole)
+    setAuthMode('signin')
+    setAuthError('')
+    setAuthForm({ name: '', phone: '', password: '' })
+    setAccountOpen(false)
+    setAccessDenied(null)
+    setView('login')
+    if (requestedRole !== 'customer') window.history.replaceState(null, '', `#login/${requestedRole}`)
   }
 
   const openAccount = () => {
     if (user) setAccountOpen(true)
-    else setAuthOpen(true)
+    else openRoleLogin('customer')
   }
 
   const signOut = async () => {
@@ -399,13 +472,16 @@ function App() {
     setAccountProfile(null)
     setUser(null)
     setRole('customer')
+    setAuthRole('customer')
+    setLoginRole('customer')
+    setAccessDenied(null)
+    writeIntendedRole(null)
     setView('home')
     window.history.replaceState(null, '', window.location.pathname)
     showToast('You have been signed out', 'info')
   }
 
   const closeAuth = () => {
-    setAuthOpen(false)
     setAuthError('')
     setAuthForm({ name: '', phone: '', password: '' })
   }
@@ -414,26 +490,29 @@ function App() {
     setAuthError('')
     setAuthLoading(true)
     const phone = normalizeEthiopianPhone(form.phone)
+    const requestedRole = loginRole === 'customer' ? 'customer' : loginRole
+    const mode = requestedRole === 'admin' ? 'signin' : authMode
     let rateLimitAttempted = false
 
     try {
       if (!supabase) {
-        setRole(authRole)
+        writeIntendedRole(requestedRole)
+        setRole(requestedRole)
         closeAuth()
-        navigate(authRole === 'customer' ? 'home' : 'dashboard')
-        showToast(`Demo ${roleLabels[authRole].toLowerCase()} enabled`)
+        navigate(requestedRole === 'customer' ? 'home' : 'portal', requestedRole)
+        showToast(`Demo ${roleLabels[requestedRole].toLowerCase()} enabled`)
         return
       }
 
       if (!form.phone || !form.password) throw new Error('Enter your phone number and password.')
-      if (authMode === 'signup' && !form.name) throw new Error('Enter your full name.')
+      if (mode === 'signup' && !form.name) throw new Error('Enter your full name.')
 
       const rateLimit = await checkLoginRateLimit(supabase, phone, 'check')
       if (!rateLimit.allowed) throw new Error(rateLimit.message || 'Too many login attempts. Try again later.')
       rateLimitAttempted = true
 
-      if (authMode === 'signup') {
-        requestedAccountType.current = authRole
+      if (mode === 'signup') {
+        writeIntendedRole(requestedRole)
         await signUpWithPhone(supabase, { phone, password: form.password, name: form.name })
       }
 
@@ -441,16 +520,14 @@ function App() {
         email: phoneAliasEmail(phone),
         password: form.password,
       })
-      if (signInError) {
-        requestedAccountType.current = null
-        throw signInError
-      }
+      if (signInError) throw signInError
 
       await checkLoginRateLimit(supabase, phone, 'success')
-      setRole(authRole)
+      if (requestedRole !== 'customer') writeIntendedRole(requestedRole)
+      setRole(requestedRole)
       closeAuth()
-      navigate(authRole === 'customer' ? 'home' : 'dashboard')
-      showToast(authMode === 'signup' ? 'Phone account created successfully' : 'Welcome back to Adama Eats')
+      navigate(requestedRole === 'customer' ? 'home' : 'portal', requestedRole)
+      showToast(mode === 'signup' ? 'Phone account created successfully' : 'Welcome back to Adama Eats')
     } catch (error) {
       if (rateLimitAttempted) await checkLoginRateLimit(supabase, phone, 'failure').catch(() => {})
       setAuthError(error.message || 'Unable to authenticate right now.')
@@ -674,11 +751,48 @@ function App() {
   const liveOwner = Boolean(supabase && user && role === 'owner')
   const liveAdmin = Boolean(supabase && user && accountProfile?.role === 'admin' && role === 'admin')
   const liveDriver = Boolean(supabase && user && role === 'driver')
+  const canAccessPortal = Boolean(user && (
+    (role === 'admin' && accountProfile?.role === 'admin') ||
+    (role === 'owner' && (authRole === 'owner' || accountProfile?.role === 'owner' || ownerWorkspace.restaurant)) ||
+    (role === 'driver' && (authRole === 'driver' || accountProfile?.role === 'driver' || driverWorkspace.profile))
+  ))
   const liveApprovalItems = liveAdmin ? [...adminApprovals.restaurants, ...adminApprovals.drivers] : approvalItems
+
+  const immersiveView = view === 'login' || view === 'access-denied'
+
+  const openPasswordReset = () => {
+    setView('home')
+    setResetOpen(true)
+  }
+
+  const roleLoginView = (viewRole) => (
+    <RoleLoginPage
+      role={viewRole}
+      mode={authMode}
+      setMode={setAuthMode}
+      form={authForm}
+      setForm={setAuthForm}
+      loading={authLoading}
+      error={authError}
+      onSubmit={handleAuth}
+      onBack={() => navigate('home')}
+      onForgotPassword={openPasswordReset}
+      onSwitchRole={openRoleLogin}
+    />
+  )
+
+  const accessDeniedView = (deniedRole) => (
+    <AccessDeniedPage
+      role={deniedRole}
+      onBack={() => navigate('home')}
+      onLogin={() => openRoleLogin(deniedRole)}
+      onSignOut={signOut}
+    />
+  )
 
   return (
     <div className="app-shell">
-      {view !== 'portal' && (
+      {!immersiveView && view !== 'portal' && (
         <>
           <Header
             t={t}
@@ -702,15 +816,17 @@ function App() {
               <span>
                 {isSupabaseConfigured ? 'Supabase connected' : 'Preview mode · connect Supabase when you are ready'}
               </span>
-              <button type="button" onClick={() => setAuthOpen(true)}>
-                {isSupabaseConfigured ? 'Manage account' : 'Connect account'} <ArrowRight size={14} />
+              <button type="button" onClick={openAccount}>
+                {isSupabaseConfigured ? 'Manage account' : 'Sign in'} <ArrowRight size={14} />
               </button>
             </div>
           </div>
         </>
       )}
 
-      <main className={view === 'portal' ? 'portal-page' : 'page-container'}>
+      <main className={view === 'portal' ? 'portal-page' : (view === 'login' || view === 'access-denied') ? 'full-screen-page' : 'page-container'}>
+        {view === 'login' && roleLoginView(loginRole)}
+        {view === 'access-denied' && accessDeniedView(accessDenied || role)}
         {view === 'home' && (
           <HomeView
             t={t}
@@ -720,7 +836,7 @@ function App() {
             setCategory={setCategory}
             restaurants={filteredRestaurants}
             openRestaurant={openRestaurant}
-            setAuthOpen={setAuthOpen}
+            onAuth={(requestedRole) => openRoleLogin(requestedRole)}
           />
         )}
 
@@ -735,7 +851,7 @@ function App() {
 
         {view === 'orders' && <OrdersView order={currentOrder} navigate={navigate} />}
 
-        {view === 'portal' && (
+        {view === 'portal' && canAccessPortal && (
           <RolePortal
             role={role}
             user={user}
@@ -762,9 +878,11 @@ function App() {
             onAccount={openAccount}
           />
         )}
+        {view === 'portal' && !canAccessPortal && !user && roleLoginView(role === 'customer' ? loginRole : role)}
+        {view === 'portal' && !canAccessPortal && user && accessDeniedView(accessDenied || role)}
       </main>
 
-      {view === 'home' && <Footer navigate={navigate} />}
+      {view === 'home' && <Footer navigate={navigate} onAuth={openRoleLogin} />}
 
       <CartDrawer
         open={cartOpen}
@@ -790,22 +908,6 @@ function App() {
           total={total}
           onClose={() => setCheckoutOpen(false)}
           onConfirm={handlePlaceOrder}
-        />
-      )}
-
-      {authOpen && (
-        <PhoneAuthModal
-          mode={authMode}
-          setMode={setAuthMode}
-          form={authForm}
-          setForm={setAuthForm}
-          role={authRole}
-          setRole={setAuthRole}
-          onReset={() => { setAuthOpen(false); setResetOpen(true) }}
-          onClose={closeAuth}
-          onSubmit={handleAuth}
-          loading={authLoading}
-          error={authError}
         />
       )}
 
@@ -899,7 +1001,7 @@ function Header({
   )
 }
 
-function HomeView({ t, search, setSearch, category, setCategory, restaurants: visibleRestaurants, openRestaurant, setAuthOpen }) {
+function HomeView({ t, search, setSearch, category, setCategory, restaurants: visibleRestaurants, openRestaurant, onAuth }) {
   return (
     <>
       <section className="hero-section">
@@ -911,7 +1013,7 @@ function HomeView({ t, search, setSearch, category, setCategory, restaurants: vi
             <button className="primary-button" type="button" onClick={() => document.getElementById('restaurants')?.scrollIntoView({ behavior: 'smooth' })}>
               Explore restaurants <ArrowRight size={17} />
             </button>
-            <button className="text-button" type="button" onClick={() => setAuthOpen(true)}>
+            <button className="text-button" type="button" onClick={() => onAuth('owner')}>
               Become a partner <ChevronRight size={16} />
             </button>
           </div>
@@ -966,7 +1068,7 @@ function HomeView({ t, search, setSearch, category, setCategory, restaurants: vi
       </section>
 
       <section className="promo-section">
-        <div className="promo-copy"><span className="promo-label"><Sparkles size={14} /> Adama Eats promise</span><h2>More than a delivery.<br /><em>A little more home.</em></h2><p>Every order supports a local kitchen, a real driver, and a neighbor who wanted to eat well today.</p><button className="light-button" type="button" onClick={() => setAuthOpen(true)}>Join the community <ArrowRight size={16} /></button></div>
+        <div className="promo-copy"><span className="promo-label"><Sparkles size={14} /> Adama Eats promise</span><h2>More than a delivery.<br /><em>A little more home.</em></h2><p>Every order supports a local kitchen, a real driver, and a neighbor who wanted to eat well today.</p><button className="light-button" type="button" onClick={() => onAuth('customer')}>Join the community <ArrowRight size={16} /></button></div>
         <div className="promo-art"><div className="promo-circle" /><div className="promo-plate"><span>AE</span></div><div className="promo-spark spark-one">✦</div><div className="promo-spark spark-two">✧</div><div className="promo-spark spark-three">✦</div></div>
       </section>
     </>
@@ -1216,8 +1318,8 @@ function Toast({ toast, onClose }) {
   return <div className={`toast toast-${toast.tone}`}><span className="toast-icon">{toast.tone === 'warning' ? <AlertCircle size={17} /> : toast.tone === 'info' ? <Sparkles size={17} /> : <CheckCircle2 size={17} />}</span><span>{toast.message}</span><button type="button" onClick={onClose} aria-label="Close notification"><X size={15} /></button></div>
 }
 
-function Footer({ navigate }) {
-  return <footer className="site-footer"><div className="footer-inner"><div><button className="brand footer-brand" type="button" onClick={() => navigate('home')}><span className="brand-mark">ae</span><span className="brand-word">adama<span>eats</span></span></button><p>Good food, closer to home.</p></div><div className="footer-links"><button type="button" onClick={() => navigate('home')}>Discover</button><button type="button" onClick={() => navigate('orders')}>Your orders</button><button type="button">Help center</button><button type="button">For partners</button></div><div className="footer-bottom"><span>© 2026 Adama Eats</span><span>Made for Adama, Ethiopia <span className="footer-heart">♥</span></span></div></div></footer>
+function Footer({ navigate, onAuth }) {
+  return <footer className="site-footer"><div className="footer-inner"><div><button className="brand footer-brand" type="button" onClick={() => navigate('home')}><span className="brand-mark">ae</span><span className="brand-word">adama<span>eats</span></span></button><p>Good food, closer to home.</p></div><div className="footer-links"><button type="button" onClick={() => navigate('home')}>Discover</button><button type="button" onClick={() => navigate('orders')}>Your orders</button><button type="button" onClick={() => onAuth('owner')}>Restaurant partners</button><button type="button" onClick={() => onAuth('driver')}>Drivers</button><button type="button" onClick={() => onAuth('admin')}>Admin access</button></div><div className="footer-bottom"><span>© 2026 Adama Eats</span><span>Made for Adama, Ethiopia <span className="footer-heart">♥</span></span></div></div></footer>
 }
 
 export default App

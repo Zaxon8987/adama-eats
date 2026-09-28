@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node tests/portal-routing.test.js && npm run test:render",
+    "test:render": "esbuild tests/role-login-render.test.jsx --bundle --format=esm --platform=node --jsx=automatic --main-fields=module,main --conditions=module,import --outfile=node_modules/.cache/role-login-render.mjs --external:react --external:react-dom --external:react-dom/server && node node_modules/.cache/role-login-render.mjs && npm run test:app",
+    "test:app": "esbuild tests/app-render.test.jsx --bundle --format=esm --platform=node --jsx=automatic --main-fields=module,main --conditions=module,import --outfile=node_modules/.cache/app-render.mjs --external:react --external:react-dom --external:react-dom/server --define:import.meta.env={} && node node_modules/.cache/app-render.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
